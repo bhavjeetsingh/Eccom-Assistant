@@ -12,7 +12,11 @@ wheels/
 env/
 venv/
 .env
-
+.env
+*.env
+.env.local
+.env.production
+logs/
 # IDE/editor settings
 .vscode/
 .idea/
