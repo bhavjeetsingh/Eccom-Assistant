@@ -1,0 +1,80 @@
+name: Deploy App to EKS
+
+on:
+  push:
+    branches:
+      - main   # Runs automatically on push to main branch
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Check if EKS Cluster exists
+      - name: Check if EKS Cluster exists
+        run: |
+          if ! aws eks describe-cluster --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}; then
+            echo "EKS Cluster not found! Run infra.yml workflow first."
+            exit 1
+          fi
+
+      # Login to ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # Build, tag and push Docker image to ECR
+      - name: Build and Push Docker image
+        env:
+          REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          IMAGE_TAG=latest
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+      # Setup kubectl
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      # Update kubeconfig for EKS (assumes cluster already exists)
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+
+      # Create/Update Kubernetes Secret (for API keys)
+      - name: Create Kubernetes secret for API keys
+        run: |
+          kubectl create secret generic product-assistant-secrets \
+            --from-literal=GROQ_API_KEY=${{ secrets.GROQ_API_KEY }} \
+            --from-literal=GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }} \
+            --from-literal=ASTRA_DB_API_ENDPOINT=${{ secrets.ASTRA_DB_API_ENDPOINT }} \
+            --from-literal=ASTRA_DB_APPLICATION_TOKEN=${{ secrets.ASTRA_DB_APPLICATION_TOKEN }} \
+            --from-literal=ASTRA_DB_KEYSPACE=${{ secrets.ASTRA_DB_KEYSPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # Deploy manifests
+      - name: Deploy to EKS
+        run: |
+          kubectl apply -f k8/deployment.yaml
+          kubectl apply -f k8/service.yaml
+
+      # Verify rollout
+      - name: Verify Deployment
+        run: |
+          kubectl rollout status deployment/product-assistant
+          kubectl get svc product-assistant-service

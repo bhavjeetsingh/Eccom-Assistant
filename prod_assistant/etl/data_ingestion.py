@@ -110,7 +110,7 @@ class DataIngestion:
             token=self.db_application_token,
             namespace=self.db_keyspace,
         )
-
+        
         inserted_ids = vstore.add_documents(documents)
         print(f"Successfully inserted {len(inserted_ids)} documents into AstraDB.")
         return vstore, inserted_ids
